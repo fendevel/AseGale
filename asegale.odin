@@ -1,14 +1,13 @@
 package asegale
 
 import "base:runtime"
-import "core:reflect"
 import "core:os"
 import "core:mem"
 import "core:io"
 import "core:fmt"
+import "core:log"
 import "core:slice"
 import "core:strings"
-import "core:time"
 import "vendor:zlib"
 import "core:path/filepath"
 import "gale"
@@ -18,37 +17,43 @@ Options :: struct {
     output_dir: string,
 }
 
-write_palette :: proc(ostream: io.Stream, palette: [][3]byte, trans_index: int) -> (offset: int, err: io.Error) {
-    palette_data: [0x100]ase.Palette_Entry
+write_palette :: proc(ostream: io.Stream, src_palette: [][3]byte, trans_index: int) -> (offset: int, err: io.Error) {
+    dst_palette: [0x100]ase.Palette_Entry
 
-    for rgb, i in palette {
+    if len(src_palette) > len(dst_palette) {
+        log.logf(.Warning, "Source palette colour count ({}) larger than 256, truncating output...", len(src_palette))
+    }
+
+    src_palette := src_palette[:min(len(src_palette), len(dst_palette))]
+
+    for rgb, i in src_palette {
         if i == trans_index {
             continue
         }
-        palette_data[i].rgba.rgb = rgb
-        palette_data[i].rgba.a = 255
+        dst_palette[i].rgba.rgb = rgb
+        dst_palette[i].rgba.a = 255
     }
 
     offset += io.write(ostream, mem.any_to_bytes(ase.Palette {
         chunk = {
-            size = size_of(ase.Palette) + size_of(ase.Palette_Entry)*u32(len(palette)),
+            size = size_of(ase.Palette) + size_of(ase.Palette_Entry)*u32(len(src_palette)),
             type = .Palette,
         },
-        entry_count = u32(len(palette)),
-        change_range = {0, u32(len(palette)) - 1, },
+        entry_count = u32(len(src_palette)),
+        change_range = {0, u32(len(src_palette)) - 1, },
     })) or_return
 
-    offset += io.write(ostream, mem.slice_to_bytes(palette_data[:len(palette)])) or_return
+    offset += io.write(ostream, mem.slice_to_bytes(dst_palette[:len(src_palette)])) or_return
 
     return
 }
 
-convert_gal :: proc(uri: string, options: Options) -> (native_err: os.Errno, err: io.Error) {
+convert_gal :: proc(uri, output_uri: string, options: Options) -> (native_err: os.Errno, err: io.Error) {
+    checkpoint := runtime.default_temp_allocator_temp_begin()
+    defer runtime.default_temp_allocator_temp_end(checkpoint)
+
     if buffer, good := os.read_entire_file(uri, context.temp_allocator); good {
         if file, good := gale.parse_buffer(buffer); good {
-
-            output_uri := filepath.join({ options.output_dir, fmt.tprintf("{}.aseprite", filepath.short_stem(uri)), }, context.temp_allocator)
-
             ofile, open_err := os.open(output_uri, os.O_CREATE|os.O_TRUNC)
             if open_err != 0 {
                 return open_err, .Unknown
@@ -130,7 +135,7 @@ convert_gal :: proc(uri: string, options: Options) -> (native_err: os.Errno, err
                     size = size_of(ase.Frame),
                     magic = 0xf1fa,
                     chunk_count = 0,
-                    duration = u16(srcframe.delay/time.Millisecond),
+                    duration = u16(srcframe.delay_ms),
                     chunk_count2 = 0,
                 }
 
@@ -389,7 +394,25 @@ convert_gal :: proc(uri: string, options: Options) -> (native_err: os.Errno, err
     return
 }
 
+print_help :: proc() {
+    fmt.println("Usage: ./asegale.exe -o output/dir/here file1path.gal file2path.gal file3path.gal")
+    fmt.println()
+    fmt.println("Options:")
+    fmt.println("-h, --help\t\t\tPrints this message.")
+    fmt.println("-o <directory path>\t\tSpecifies the destination for converted files. Omitting this will use AseGale's directory.")
+}
+
 main :: proc() {
+    context.logger = log.create_console_logger(.Debug, {
+        .Level,
+        .Date,
+        .Time,
+        .Short_File_Path,
+        .Line,
+        .Procedure,
+        .Terminal_Color,
+    })
+
     args := os.args[1:]
 
     uris := make([dynamic]string, 0, len(args), context.temp_allocator)
@@ -398,58 +421,57 @@ main :: proc() {
         output_dir = filepath.dir(os.args[0]),
     }
 
-    fmt.println("AseGale version 1.0.0")
+    fmt.println("AseGale version 1.0.1")
 
-    skip_next: bool
-    for arg, i in args {
-        if skip_next {
-            skip_next = false
-            continue
-        }
-
-        if filepath.ext(arg) == ".gal" {
-            if os.exists(arg) {
-                append(&uris, arg)
-            } else {
-                fmt.eprintfln("ERROR: Cannot find file \"{}\"", arg)
-            }
+    for arg, i in args do if arg[0] != '-' && filepath.ext(arg) == ".gal" {
+        if os.exists(arg) {
+            append(&uris, filepath.clean(arg, context.temp_allocator))
         } else {
-            switch arg {
-                case "-o": {
-                    skip_next = true
-                    if i + 1 != len(args) {
-                        options.output_dir = filepath.clean(args[i + 1], context.temp_allocator)
-                        if !os.exists(options.output_dir) {
-                            fmt.eprintfln("ERROR: the specified output directory doesn't exist: \"{}\"", options.output_dir)
-                            return
-                        }
+            log.logf(.Error, "Cannot find file \"{}\"", arg)
+        }
+    }
+
+    for arg, i in args do if arg[0] == '-' {
+        switch arg {
+            case "--help": fallthrough
+            case "-h": {
+                print_help()
+                return
+            }
+            case "-o": {
+                if i + 1 != len(args) {
+                    options.output_dir = filepath.clean(args[i + 1], context.temp_allocator)
+                    if !os.exists(options.output_dir) {
+                        log.logf(.Error, "The specified output directory doesn't exist: \"{}\"", options.output_dir)
+                        return
                     }
                 }
-                case: {
-                    fmt.printfln("ignoring unknown option: \"{}\"", arg)
-                }
+            }
+            case: {
+                log.logf(.Warning, "Ignoring unknown option: \"{}\"", arg)
             }
         }
     }
 
     if slice.is_empty(uris[:]) {
-        fmt.println("No input files.")
+        log.log(.Info, "No input files.")
         return
     }
 
     successes := 0
 
     for uri in uris {
-        fmt.printfln("file: {}", uri)
+        fmt.printfln("file: {}", filepath.rel(os.args[0], uri, context.temp_allocator) or_else uri)
 
-        native_err, err := convert_gal(uri, options)
+        output_uri := filepath.join({ options.output_dir, fmt.tprintf("{}.aseprite", filepath.short_stem(uri)), }, context.temp_allocator)
+        native_err, err := convert_gal(uri, output_uri, options)
         if err == nil {
             successes += 1
         } else {
             if native_err != 0 {
-                fmt.eprintfln("ERROR: {}", native_err)
+                log.logf(.Error, "Conversion return native error code: {}", native_err)
             } else {
-                fmt.eprintfln("ERROR: {}", err)
+                log.logf(.Error, "Conversion returned error code: {}", err)
             }
         }
     }

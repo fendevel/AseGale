@@ -3,15 +3,11 @@ package gale
 import "base:runtime"
 import "core:mem"
 import "core:bytes"
-import "core:fmt"
+import "core:log"
 import "core:strconv"
 import "core:slice"
-import "core:time"
 import "core:strings"
-import "core:c/libc"
-// import "vendor:zlib"
 import "core:compress/zlib"
-import "core:dynlib"
 import "core:encoding/xml"
 
 FrameDisposal :: enum {
@@ -45,7 +41,7 @@ Milliseconds :: distinct int
 Frame :: struct {
 	name: string,
 	trans_color: int,
-	delay: time.Duration,
+	delay_ms: int,
 	disposal: FrameDisposal,
 
     width: int,
@@ -111,7 +107,7 @@ parse_buffer :: proc(buffer: []byte, allocator := context.temp_allocator) -> (ga
 
     doc, err := xml.parse_bytes(xml_decompbuff.buf[:])
     if err != nil {
-        fmt.eprintln("ERROR:", err)
+        log.logf(.Error, "Conversion returned error code: {}", err)
         destroy(gale)
         return {}, false
     }
@@ -184,7 +180,7 @@ parse_buffer :: proc(buffer: []byte, allocator := context.temp_allocator) -> (ga
 
         if val, has_val := xml.find_attribute_val_by_key(doc, frame_id, "Delay"); has_val {
             val := strconv.parse_int(val) or_return
-            frame.delay = time.Millisecond*time.Duration(val)
+            frame.delay_ms = val
         }
 
         if val, has_val := xml.find_attribute_val_by_key(doc, frame_id, "Disposal"); has_val {
@@ -276,7 +272,7 @@ parse_buffer :: proc(buffer: []byte, allocator := context.temp_allocator) -> (ga
             offset += 4
 
             if err := zlib.inflate_from_byte_array(buffer[blocks_start + offset:][:compressed_size], &buff); err != nil {
-                fmt.eprintln("ERROR:", err)
+                log.logf(.Error, "Failed to inflate image data: {}", err)
                 destroy(gale)
                 return {}, false
             }
@@ -291,7 +287,7 @@ parse_buffer :: proc(buffer: []byte, allocator := context.temp_allocator) -> (ga
 
             if alpha_compressed_size != 0 {
                 if err := zlib.inflate_from_byte_array(buffer[blocks_start + offset:][:alpha_compressed_size], &buff); err != nil {
-                    fmt.eprintln("ERROR:", err)
+                    log.logf(.Error, "Failed to inflate image alpha data: {}", err)
                     destroy(gale)
                     return {}, false
                 }

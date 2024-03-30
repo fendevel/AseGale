@@ -2,11 +2,10 @@ package ase
 
 import "core:math/fixed"
 import "core:os"
-import "core:fmt"
+import "core:log"
 import "core:mem"
 import "core:slice"
 import "core:bytes"
-import "core:compress"
 import "core:compress/zlib"
 
 Fixed :: fixed.Fixed16_16
@@ -310,7 +309,7 @@ read_cel_data :: proc(header: ^Header, cel: ^Cel, allocator := context.allocator
             err := zlib.inflate_from_byte_array(input, &output, expected_output_size = int(size))
             if err != nil {
                 bytes.buffer_destroy(&output)
-                fmt.eprintln("ERROR:", err)
+                log.logf(.Error, "Conversion returned error code: {}", err)
                 return nil, false, false
             }
 
