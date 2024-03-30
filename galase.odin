@@ -395,7 +395,7 @@ convert_gal :: proc(uri, output_uri: string, options: Options) -> (native_err: o
 }
 
 print_help :: proc() {
-    fmt.println("Usage: ./asegale.exe -o output/dir/here file1path.gal file2path.gal file3path.gal")
+    fmt.println("Usage: ./galase.exe -o output/dir/here file1path.gal file2path.gal file3path.gal")
     fmt.println()
     fmt.println("Options:")
     fmt.println("-h, --help\t\t\tPrints this message.")
@@ -421,7 +421,7 @@ main :: proc() {
         output_dir = filepath.dir(os.args[0]),
     }
 
-    fmt.println("AseGale version 1.0.1")
+    fmt.println("GalAse version 1.0.1")
 
     for arg, i in args do if arg[0] != '-' && filepath.ext(arg) == ".gal" {
         if os.exists(arg) {
